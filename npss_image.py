@@ -446,15 +446,126 @@ def fixed_pattern_rgb(img, B=BLK, min_corr=0.5):
 
 @_silent
 def denoise_auto(img, sigma=None, k0=3.0, blocks=(4, 8, 16), lam=0.5,
-                 remove_pattern=True):
-    """Recommended entry point: gated fixed-pattern removal, then structural denoise.
+                 remove_pattern=True, flat_threshold=1.6, colored_route=False):
+    """Unified entry point: everything that was validated, in the right order.
 
-    The pattern step is gated by the two-half correlation, so images without a fixed
-    pattern take exactly the same path as `denoise_structural` (no cost, no change).
-    `denoise_iterative` was tried and dropped: it degrades ordinary images badly.
+    1. **Gated fixed-pattern removal** — pooled block halves are compared; if they
+       agree (correlation > 0.5) the common spatial pattern is subtracted. Otherwise
+       the image is untouched.
+    2. **Noise routing** — `noise_profile()` measures the noise level per DCT
+       frequency. Flat curve (< `flat_threshold`) → white noise → a single scalar
+       sigma describes it exactly. Curved → coloured noise → per-frequency thresholds.
+    3. **Structural denoising** — DCT hard threshold, multi-scale cycle spinning,
+       threshold relaxed where cross-phase decisions agree (`rho`).
+
+    Returns `(image, info)` where info carries `pattern_corr`, `pattern_used`,
+    `flatness` and `route` ("white" | "coloured").
     """
     a = to_float(img)
+    single = a.ndim == 2
+    if single:
+        a = a[..., None]
+    a = a.astype(np.float32)
+
+    pat_corr, pat_used = 0.0, False
     if remove_pattern:
-        a, _corr, _used = fixed_pattern_rgb(a)
+        a, pat_corr, pat_used = fixed_pattern_rgb(a)
         a = a.astype(np.float32)
-    return denoise_structural(a, sigma=sigma, k0=k0, blocks=blocks, lam=lam)
+
+    ch = a.shape[2]
+    outs = []
+    flat_all = []
+    route = "white"
+    for c in range(ch):
+        grid, flatness = noise_profile(a[..., c])
+        flat_all.append(flatness)
+        # 有色路由默认关闭：周期性纹理图（如织物）的平坦度会与真有色噪声重叠，
+        # 误判会掉 3 dB。开启后对自然/平滑照片的有色噪声 +2.3~4.5 dB。
+        use_colored = bool(colored_route) and flatness >= flat_threshold
+        if sigma is None:
+            # 白噪声用精确的标量估计；有色噪声才走曲线（曲线均值在纹理图上会高估）
+            sigma_c = None if use_colored else float(_estimate_sigma(a[..., c]))
+        else:
+            sigma_c = float(sigma)
+        parts = []
+        for B in (blocks or (BLK,)):
+            if sigma_c is not None:
+                if use_colored:
+                    # 有色：用曲线，但整体缩放到用户/自动给出的 sigma
+                    grid_b, _ = noise_profile(a[..., c], B)
+                    grid_b = grid_b * (sigma_c / max(float(np.mean(grid_b)), 1e-9))
+                    rho = structure_confidence(a[..., c], sigma_c, k0, B) if lam > 0 else None
+                    parts.append(_denoise_grid(a[..., c], grid_b, k0, B,
+                                               min(B * B, 64), rho, lam))
+                else:
+                    o, _ = denoise_structural(a[..., c], sigma=sigma_c, k0=k0,
+                                              blocks=(B,), lam=lam)
+                    parts.append(np.clip(o, 0, 1))
+            else:
+                rho = structure_confidence(a[..., c], float(np.mean(grid)), k0, B) if lam > 0 else None
+                parts.append(_denoise_grid(a[..., c], grid, k0, B, min(B * B, 64), rho, lam))
+        if use_colored:
+            route = "coloured"
+        outs.append(np.mean(np.stack(parts, 0), axis=0))
+    out = np.clip(np.stack(outs, -1), 0.0, 1.0).astype(np.float32)
+    info = {"pattern_corr": round(float(pat_corr), 3), "pattern_used": bool(pat_used),
+            "flatness": round(float(np.mean(flat_all)), 2), "route": route}
+    return (out[..., 0] if single else out), info
+
+# ------------------------------------------------- noise profile / routing
+@_silent
+def noise_profile(a, B=BLK, flat_frac=0.2):
+    """Estimate noise level per DCT frequency and how flat that curve is.
+
+    Only the flattest `flat_frac` of blocks are used (lowest AC energy), where content
+    is weak and coefficients are dominated by noise. Returns `(sigma_grid, flatness)`:
+    flatness < 1.6 means white noise (a scalar sigma is exact), larger means coloured.
+    """
+    h, w = a.shape
+    h8, w8 = h // B * B, w // B * B
+    if h8 < B or w8 < B:
+        return np.full((B, B), max(_estimate_sigma(a), 1e-4)), 1.0
+    K, KT = _block_mats(B)
+    blk = (a[:h8, :w8].reshape(h8 // B, B, w8 // B, B).transpose(0, 2, 1, 3)
+           .reshape(-1, B * B).astype(np.float64))
+    C = (blk @ KT).reshape(-1, B, B)
+    ac = (C[:, :, 1:] ** 2).sum(axis=(1, 2))
+    n_keep = max(8, int(len(ac) * flat_frac))
+    idx = np.argsort(ac)[:n_keep]
+    sig = np.median(np.abs(C[idx]), axis=0) / 0.6745
+    sig[0, 0] = sig[0, 1]
+    sig = np.maximum(sig, 1e-5)
+    band = sig[:, 1:].ravel()
+    return sig, float(band.max() / max(band.min(), 1e-9))
+
+
+@_silent
+def _denoise_grid(a, sigma_grid, k0, B, phases, rho=None, lam=0.0):
+    """Threshold with a per-frequency sigma grid (optionally relaxed by rho)."""
+    K, KT = _block_mats(B)
+    h, w = a.shape
+    n = int(max(1, round(np.sqrt(phases))))
+    offs = sorted({int(round(i * B / n)) % B for i in range(n)})
+    acc = np.zeros((h, w), dtype=np.float64)
+    cnt = 0
+    for sy in offs:
+        for sx in offs:
+            p = np.pad(a, ((sy, sy + B), (sx, sx + B)), mode="symmetric")
+            ps = np.pad(rho, ((sy, sy + B), (sx, sx + B)), mode="symmetric") if rho is not None else None
+            ny, nx = p.shape[0] // B, p.shape[1] // B
+            blk = (p[:ny * B, :nx * B].reshape(ny, B, nx, B).transpose(0, 2, 1, 3)
+                   .reshape(-1, B * B).astype(np.float64))
+            C = (blk @ KT).reshape(ny, nx, B, B)
+            thr = (k0 * sigma_grid)[None, None]
+            if ps is not None and lam > 0:
+                rb = ps[:ny * B, :nx * B].reshape(ny, B, nx, B).mean(axis=(1, 3))
+                thr = thr * np.clip(1.0 - lam * rb, 0.3, 1.0)[..., None, None]
+            g = np.abs(C) > thr
+            g[..., 0, 0] = True
+            rec = ((C * g).reshape(-1, B * B) @ K).reshape(ny, nx, B, B)
+            rec = rec.transpose(0, 2, 1, 3).reshape(ny * B, nx * B)
+            full = np.zeros(p.shape, dtype=np.float64)
+            full[:rec.shape[0], :rec.shape[1]] = rec
+            acc += full[sy:sy + h, sx:sx + w]
+            cnt += 1
+    return acc / float(cnt)

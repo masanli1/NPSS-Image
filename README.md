@@ -93,6 +93,27 @@ Measured separation between structure (top 10% gradient) and flat (bottom 40%) r
 
 Clearing DC is a one-line change that turns the map from noise into the whole signal.
 
+## Pipeline (v1.3)
+
+```python
+out, info = M.denoise_auto(img)     # everything below, in order
+# info = {'pattern_corr': 0.97, 'pattern_used': True, 'flatness': 1.4, 'route': 'white'}
+```
+
+1. gated fixed-pattern removal,
+2. noise-type diagnostics (per-frequency sigma + flatness),
+3. DCT threshold + multi-scale cycle spinning + structure-confidence relaxation.
+
+On white noise and pattern-free images step 1 and the routing are skipped, so the output is
+identical to `denoise_structural`.
+
+### Coloured noise (opt-in)
+
+`denoise_auto(img, colored_route=True)` uses per-frequency thresholds when the noise curve
+is not flat: **+4.5 / +2.3 / +2.8 dB** on kodim23 / grass / kodim01. It is off by default
+because a strongly periodic texture (woven fabric) reads the same flatness and loses
+**−3.0 dB**.
+
 ## Fixed-pattern removal (v1.1)
 
 Real cameras, scanners and screen captures often carry a *spatial* pattern on top of

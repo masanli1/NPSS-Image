@@ -96,6 +96,8 @@ def main():
     ap.add_argument("--sigma", type=float, nargs="+", default=[15, 25])
     ap.add_argument("--lam", type=float, nargs="+", default=[0.0, 0.5])
     ap.add_argument("--kodak", default=None, help="directory containing kodim01.png ...")
+    ap.add_argument("--colored", action="store_true",
+                    help="also test coloured (low-pass) noise")
     ap.add_argument("--pattern", action="store_true",
                     help="also test a periodic fixed-pattern noise")
     args = ap.parse_args()
@@ -132,6 +134,26 @@ def main():
                     continue
                 d = np.mean(acc[l]) - np.mean(acc[0])
                 print(f"  gain at lam={l}: {d:+.2f} dB")
+
+    if args.colored:
+        print("\n=== coloured noise (low-pass, sigma=20) ===")
+        print("image".ljust(10) + "  scalar sigma   routed   route     flatness")
+        for name, clean in images.items():
+            h, w = clean.shape[:2]
+            rng = np.random.default_rng(zlib.crc32(f"{name}-col".encode()) % 100000)
+            n = rng.normal(0, 1, clean.shape[:2])
+            F = np.fft.fft2(n)
+            fy = np.fft.fftfreq(h)[:, None]
+            fx = np.fft.fftfreq(w)[None, :]
+            n = np.real(np.fft.ifft2(F * np.exp(-((fy * 6) ** 2 + (fx * 6) ** 2))))
+            n = n / n.std() * 20 / 255.0
+            n = n[..., None] if clean.ndim == 3 else n
+            noisy = np.clip(clean + n, 0, 1)
+            base, _ = M.denoise_structural(noisy, sigma=None, k0=3.0, blocks=(8,), lam=0.5)
+            routed, info = M.denoise_auto(noisy, sigma=None, blocks=(8,), lam=0.5)
+            pb = M.psnr(np.clip(base, 0, 1), clean)
+            pr = M.psnr(np.clip(routed, 0, 1), clean)
+            print(f"{name:<10}  {pb:6.2f}       {pr:6.2f}  {info['route']:<8}  {info['flatness']:.1f}  ({pr-pb:+.2f})")
 
     if args.pattern:
         print("\n=== periodic fixed pattern (+ AWGN sigma=10) ===")
