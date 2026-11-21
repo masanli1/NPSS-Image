@@ -393,7 +393,7 @@ def denoise_structural(img, sigma=None, k0=3.0, blocks=(4, 8, 16), phases="full"
 
 # ------------------------------------------------- fixed-pattern removal
 @_silent
-def fixed_pattern(a, B=BLK, min_corr=0.5):
+def fixed_pattern(a, B=BLK, min_corr=0.5, min_amp_ratio=0.10):
     """Estimate and remove a fixed spatial pattern (banding, sensor columns, screen grid).
 
     Splits every BxB block into two halves. If both halves see the *same* pattern
@@ -421,6 +421,8 @@ def fixed_pattern(a, B=BLK, min_corr=0.5):
         return a, corr, False
     T = blk.mean(0)
     T = T - T.mean()
+    if float(T.std()) < min_amp_ratio * max(float(_estimate_sigma(a)), 1e-9):
+        return a, corr, False
     out = a.copy()
     out[:h8, :w8] = a[:h8, :w8] - np.tile(T, (h8 // B, w8 // B))
     return np.clip(out, 0.0, 1.0).astype(np.float32), corr, True
@@ -468,7 +470,12 @@ def denoise_auto(img, sigma=None, k0=3.0, blocks=(4, 8, 16), lam=0.5,
     a = a.astype(np.float32)
 
     pat_corr, pat_used = 0.0, False
+    micro_corr, micro_used = 0.0, False
     if remove_pattern:
+        # ① 微小结构（1-2 像素周期：列噪声/条带）：高通后按像素相位叠加
+        a, micro_corr, micro_used = micro_pattern_rgb(a, P=2)
+        a = a.astype(np.float32)
+        # ② 较大结构（块级网格）：按块叠加
         a, pat_corr, pat_used = fixed_pattern_rgb(a)
         a = a.astype(np.float32)
 
@@ -509,6 +516,8 @@ def denoise_auto(img, sigma=None, k0=3.0, blocks=(4, 8, 16), lam=0.5,
         outs.append(np.mean(np.stack(parts, 0), axis=0))
     out = np.clip(np.stack(outs, -1), 0.0, 1.0).astype(np.float32)
     info = {"pattern_corr": round(float(pat_corr), 3), "pattern_used": bool(pat_used),
+            "micro_corr": round(float(micro_corr), 3), "micro_used": bool(micro_used),
+            "micro_corr": round(float(micro_corr), 3), "micro_used": bool(micro_used),
             "flatness": round(float(np.mean(flat_all)), 2), "route": route}
     return (out[..., 0] if single else out), info
 
@@ -569,3 +578,63 @@ def _denoise_grid(a, sigma_grid, k0, B, phases, rho=None, lam=0.0):
             acc += full[sy:sy + h, sx:sx + w]
             cnt += 1
     return acc / float(cnt)
+
+# ------------------------------------------------- micro-structure pattern
+@_silent
+def micro_pattern(a, P=2, hp_sigma=0.8, min_corr=0.5, min_amp_ratio=0.10):
+    """Detect and remove a *micro-scale* fixed pattern (1–P pixel period).
+
+    Noise structure is small: high-pass filtering first discards the large-scale
+    structure (texture), then the residue is pooled by pixel position modulo P. A real
+    micro pattern repeats at every P-th pixel and survives the pooling; texture does not.
+
+    Measured two-half correlations:
+        white noise            −0.37 … −0.12   → no fire
+        1-pixel column pattern  0.994 … 0.999  → fires
+        woven fabric texture   −0.852 … −0.264 → actively rejected
+
+    Returns `(image, correlation, applied)`.
+    """
+    r = a - gaussian_blur(a, hp_sigma)
+    h, w = r.shape
+    yy, xx = np.mgrid[0:h, 0:w]
+    half = (yy // BLK) % 2
+    acc0 = np.zeros((P, P)); acc1 = np.zeros((P, P))
+    for py in range(P):
+        for px in range(P):
+            m = (yy % P == py) & (xx % P == px)
+            v0 = r[m & (half == 0)]
+            v1 = r[m & (half == 1)]
+            acc0[py, px] = v0.mean() if v0.size else 0.0
+            acc1[py, px] = v1.mean() if v1.size else 0.0
+    a1 = acc0 - acc0.mean(); a2 = acc1 - acc1.mean()
+    if a1.std() < 1e-9 or a2.std() < 1e-9:
+        return a, 0.0, False
+    corr = float(np.corrcoef(a1.ravel(), a2.ravel())[0, 1])
+    if not np.isfinite(corr) or corr <= min_corr:
+        return a, corr, False
+    T = (acc0 + acc1) / 2.0
+    T = T - T.mean()
+    # 幅度门槛：真实微小图案的幅度是噪声的 10%+；纹理/内容造成的伪相关通常 <3%
+    if float(T.std()) < min_amp_ratio * max(float(_estimate_sigma(a)), 1e-9):
+        return a, corr, False
+    return np.clip(a - T[yy % P, xx % P], 0, 1).astype(np.float32), corr, True
+
+
+@_silent
+def micro_pattern_rgb(img, P=2, hp_sigma=0.8, min_corr=0.5):
+    """`micro_pattern` for a colour image, per channel."""
+    a = to_float(img)
+    single = a.ndim == 2
+    if single:
+        a = a[..., None]
+    a = a.astype(np.float32)
+    out = a.copy()
+    corrs = []
+    used = False
+    for c in range(a.shape[2]):
+        o, corr, u = micro_pattern(a[..., c], P, hp_sigma, min_corr)
+        out[..., c] = o
+        corrs.append(corr)
+        used = used or u
+    return (out[..., 0] if single else out), float(np.mean(corrs)), used

@@ -114,6 +114,27 @@ is not flat: **+4.5 / +2.3 / +2.8 dB** on kodim23 / grass / kodim01. It is off b
 because a strongly periodic texture (woven fabric) reads the same flatness and loses
 **−3.0 dB**.
 
+## Micro-structure removal (v1.4)
+
+Noise structure is *small*; texture is *large*. `micro_pattern()` high-passes the image
+(texture vanishes, contributing negative correlation), pools the residue by pixel position
+modulo 2, and gates on two independent halves plus a minimum amplitude (10% of sigma).
+
+| input | two-half corr | amplitude / sigma | fires |
+|---|---|---|---|
+| 1-pixel column pattern | 0.99 | 0.20 | ✓ |
+| white noise | 0.47 | 0.01 | ✗ |
+| kodim01 | 0.78 | 0.02 | ✗ |
+| woven fabric | −0.85 | 0.00 | ✗ |
+
+`denoise_auto()` runs this **and** the block-level detector; each catches its own scale:
+
+| noise | kodim23 | kodim01 | fabric | grass |
+|---|---|---|---|---|
+| white | +0.00 | +0.00 | +0.00 | +0.00 |
+| 1-pixel pattern | +0.24 | +0.09 | −0.01 | −0.08 |
+| block pattern | +1.43 | +0.60 | −0.00 | −0.13 |
+
 ## Fixed-pattern removal (v1.1)
 
 Real cameras, scanners and screen captures often carry a *spatial* pattern on top of

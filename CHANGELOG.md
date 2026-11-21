@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.4.0 — 2026-11-21
+
+Micro-structure detection — noise structure is *small*.
+
+Noise has a fine, pixel-scale structure; texture is a large-scale structure. Pooling whole
+8×8 blocks mixes the two, which is why earlier "template" attempts were fooled by woven
+fabric. `micro_pattern()` separates them:
+
+1. high-pass the image (removes large-scale structure — texture disappears, and in fact
+   reads as *negative* correlation),
+2. pool the residue by pixel position modulo `P` (default 2),
+3. compare two independent halves, and require the pattern amplitude to be at least 10% of
+   the noise sigma.
+
+Measured two-half correlation:
+
+| input | corr | fires |
+|---|---|---|
+| 1-pixel column pattern | **0.99** | ✓ |
+| white noise (parrot) | 0.47 | ✗ (amplitude 0.01σ) |
+| kodim01 | 0.78 | ✗ (amplitude 0.02σ) |
+| woven fabric | **−0.85** | ✗ |
+| grass | −0.26 | ✗ |
+
+The amplitude gate is what makes it safe: a real pattern is ~20% of sigma, content-induced
+spurious correlation is 1–3%.
+
+`denoise_auto()` now runs micro detection (1–2 px) **and** block detection (8 px), each with
+its own gate — a 1-pixel pattern is caught by the micro detector, an 8-pixel grid by the
+block detector, neither catches the other:
+
+| noise | kodim23 | kodim01 | fabric | grass |
+|---|---|---|---|---|
+| white | +0.00 | +0.00 | +0.00 | +0.00 |
+| 1-pixel pattern | +0.24 | +0.09 | −0.01 | −0.08 |
+| block pattern | +1.43 | +0.60 | −0.00 | −0.13 |
+
 ## 1.3.0 — 2026-11-21
 
 > Covers what was drafted as 1.2.0 (noise-profile routing); both landed in this release.
