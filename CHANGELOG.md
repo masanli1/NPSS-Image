@@ -2,6 +2,8 @@
 
 ## 1.3.0 — 2026-11-21
 
+> Covers what was drafted as 1.2.0 (noise-profile routing); both landed in this release.
+
 `denoise_auto()` is now the single entry point and runs the whole validated pipeline:
 
 1. gated fixed-pattern removal,
@@ -30,31 +32,6 @@ Measured with auto sigma on both sides:
 The fabric failure is the reason it stays opt-in: that image's *pure white noise* already
 reads a flatness of 3.90, overlapping the 4.14 of coloured noise on grass. Flatness alone
 cannot separate "coloured noise" from "strongly periodic texture", so auto-routing is unsafe.
-
-## 1.2.0 — 2026-11-21
-
-Unified entry point with noise-type routing.
-
-- `noise_profile()` — estimates the noise sigma per DCT frequency from the flattest
-  blocks, and returns how curved the curve is (`flatness`).
-- `denoise_auto()` now routes:
-  - flatness < 1.6 → white noise → scalar sigma (`_estimate_sigma`) + structural
-    enhancement — bit-identical to before;
-  - flatness ≥ 1.6 → coloured noise → **per-frequency thresholds** + structural
-    enhancement.
-- Measured (auto sigma on both sides, so the comparison is fair):
-
-| noise | before | routed | gain | flatness |
-|---|---|---|---|---|
-| white (kodim23) | 33.40 | 33.40 | +0.00 | 1.4 |
-| white (grass) | 22.91 | 22.91 | +0.00 | 1.4 |
-| white (kodim01) | 27.37 | 27.37 | +0.00 | 1.3 |
-| **coloured (kodim23)** | 22.17 | **26.66** | **+4.49** | 48.5 |
-| **coloured (grass)** | 21.47 | **23.79** | **+2.32** | 4.1 |
-| **coloured (kodim01)** | 22.16 | **24.96** | **+2.80** | 30.6 |
-
-- Flatness separates cleanly: white 1.3–1.5, coloured 4.1–48.5.
-- Pattern removal stays gated; grass shows −0.16 dB, i.e. within noise.
 
 ## 1.1.0 — 2026-11-21
 
