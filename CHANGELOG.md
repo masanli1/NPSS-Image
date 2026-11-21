@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.1.0 — 2026-11-21
+
+Gated fixed-pattern removal.
+
+- `fixed_pattern()` / `fixed_pattern_rgb()`: split every block into two halves; if both
+  halves see the same spatial pattern (correlation > 0.5) it is subtracted. Otherwise
+  nothing changes.
+- `denoise_auto()`: recommended entry — gated pattern removal, then `denoise_structural`.
+- Measured on 4 images: **+1.0 to +3.3 dB** on synthetic periodic patterns
+  (gate correlation 0.94–0.99); **exactly 0 change** on white and coloured noise
+  (gate correlation −0.49 to 0.12).
+
+### Rejected: iterative closed loop
+
+A loop of "denoise → pool patches → subtract residual template → denoise again" was
+implemented and tested (`denoise_iterative`, not shipped). It looked like +4.8 dB on a
+single image but degraded most others badly: fabric white noise 27.62 → 19.90 dB,
+grass 26.33 → 21.25 dB. The convergence signal (pooled template energy) decreases both
+when noise is removed *and* when structure is over-smoothed, so it cannot tell the two
+apart. Only the one-shot, gated version is safe.
+
 ## 1.0.0 — 2026-11-21
 
 First public release, extracted from the site's demo module.

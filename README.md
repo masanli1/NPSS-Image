@@ -53,6 +53,9 @@ import npss_image as M
 
 img = np.asarray(Image.open("photo.jpg").convert("RGB"), np.float32) / 255.0
 
+# recommended: removes a fixed pattern if one is present, then denoises
+out, info = M.denoise_auto(img, sigma=None, blocks=(4, 8, 16), lam=0.5)
+
 # best settings: multi-scale + structural enhancement
 out, _ = M.denoise_structural(img, sigma=None, k0=3.0, blocks=(4, 8, 16), lam=0.5)
 
@@ -72,6 +75,7 @@ python3 demo.py photo.jpg                          # auto sigma, best settings
 python3 demo.py photo.jpg --sigma 25 --ref clean.png   # report PSNR / SSIM
 python3 demo.py photo.jpg --enhance 0              # disable the enhancement
 python3 benchmark.py --sigma 15 25 --lam 0 0.5 0.9
+python3 benchmark.py --pattern          # fixed-pattern removal table
 ```
 
 ## Why the DC must be cleared
@@ -88,6 +92,34 @@ Measured separation between structure (top 10% gradient) and flat (bottom 40%) r
 | **DC cleared** | **0.415** | **0.072** | **0.34** |
 
 Clearing DC is a one-line change that turns the map from noise into the whole signal.
+
+## Fixed-pattern removal (v1.1)
+
+Real cameras, scanners and screen captures often carry a *spatial* pattern on top of
+random noise: column banding, sensor fixed-pattern noise, moiré grids. A random-noise
+threshold cannot touch it — the pattern looks like structure and gets preserved.
+
+`fixed_pattern()` pools every 8×8 block and checks whether two independent halves see the
+same pattern. If they do (correlation > 0.5), the common component is subtracted; if they
+do not, the image is returned untouched.
+
+| image | base | + pattern removal | gate correlation |
+|---|---|---|---|
+| fractal | 28.11 | **29.31** (+1.20) | 0.98 |
+| brick | 34.77 | **36.36** (+1.60) | 0.99 |
+| fabric | 28.94 | **29.92** (+0.99) | 0.98 |
+| grass | 28.50 | **29.53** (+1.03) | 0.99 |
+
+On white and coloured noise the gate stays at −0.49…0.12, so the step is skipped and the
+output is **bit-identical** to `denoise_structural`.
+
+`denoise_auto()` is the recommended entry point: gated pattern removal, then structural
+denoising.
+
+> An iterative version of this loop (subtract residual template, denoise again, repeat)
+> was measured and **rejected**: it degrades ordinary images badly (fabric white noise
+> 27.62 → 19.90 dB) because the convergence signal cannot distinguish "noise removed"
+> from "structure over-smoothed".
 
 ## What this is not
 

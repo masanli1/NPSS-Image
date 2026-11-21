@@ -96,6 +96,8 @@ def main():
     ap.add_argument("--sigma", type=float, nargs="+", default=[15, 25])
     ap.add_argument("--lam", type=float, nargs="+", default=[0.0, 0.5])
     ap.add_argument("--kodak", default=None, help="directory containing kodim01.png ...")
+    ap.add_argument("--pattern", action="store_true",
+                    help="also test a periodic fixed-pattern noise")
     args = ap.parse_args()
 
     images = {k: f() for k, f in BUILTIN.items()}
@@ -130,6 +132,21 @@ def main():
                     continue
                 d = np.mean(acc[l]) - np.mean(acc[0])
                 print(f"  gain at lam={l}: {d:+.2f} dB")
+
+    if args.pattern:
+        print("\n=== periodic fixed pattern (+ AWGN sigma=10) ===")
+        print("image".ljust(10) + "  base    with pattern removal")
+        for name, clean in images.items():
+            h, w = clean.shape[:2]
+            yy, xx = np.mgrid[0:h, 0:w]
+            pat = 0.025 * np.sin(2 * np.pi * xx / 8) + 0.015 * np.cos(2 * np.pi * yy / 8)
+            rng = np.random.default_rng(zlib.crc32(f"{name}-pat".encode()) % 100000)
+            noisy = np.clip(clean + rng.normal(0, 10 / 255.0, clean.shape) + pat[..., None], 0, 1)
+            base, _ = M.denoise_structural(noisy, sigma=10 / 255.0, k0=3.0, blocks=(8,), lam=0.5)
+            auto, info = M.denoise_auto(noisy, sigma=10 / 255.0, k0=3.0, blocks=(8,), lam=0.5)
+            pb = M.psnr(np.clip(base, 0, 1), clean)
+            pa = M.psnr(np.clip(auto, 0, 1), clean)
+            print(f"{name:<10}  {pb:6.2f}  {pa:6.2f}  ({pa-pb:+.2f})")
 
 
 if __name__ == "__main__":
