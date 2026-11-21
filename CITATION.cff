@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "NPSS-Image: Block-DCT Shrinkage with Cross-Phase Structure Confidence"
+abstract: "A training-free single-file image denoiser: 8x8 block DCT with 3-sigma hard thresholding, DC protection and multi-phase cycle spinning, plus a structure-confidence map built from per-phase keep/kill agreement that relaxes the threshold where structure is consistently recognised. numpy + Pillow only, CPU, no model weights."
+authors:
+  - name: "masanli1"
+    email: "2459551532@qq.com"
+version: "1.0.0"
+date-released: "2026-11-21"
+license: "other"
+repository-code: "https://github.com/masanli1/NPSS-Image"
+keywords:
+  - image denoising
+  - dct
+  - cycle spinning
+  - training-free
+  - cpu
