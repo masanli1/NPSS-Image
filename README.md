@@ -186,3 +186,43 @@ denoising.
 Dual-licensed: free for academic / non-commercial use ([LICENSE-ACADEMIC.md](LICENSE-ACADEMIC.md)),
 paid license required for commercial use ([LICENSE-COMMERCIAL.md](LICENSE-COMMERCIAL.md)).
 Contact `2459551532@qq.com`.
+
+## 运行档（variants）
+
+| 档位 | 配置 | 256² 用时 | PSNR(σ=25) |
+|---|---|---|---|
+| `fast` | 8×8 单尺度，不做图案去除 | **0.033 s** | 29.06 |
+| `standard` | 4+8+16 多尺度 + 图案去除 | 0.075 s | 29.19 |
+| `adaptive` | 逐图 SURE 有限搜索选参 | 约 6 s/图 | 视图像而定 |
+
+```python
+from variants.profiles import denoise, denoise_adaptive
+out, info = denoise(img, sigma=25/255, mode="fast")     # 高速档
+out, info = denoise(img, sigma=25/255, mode="standard")  # 质量档
+out, info = denoise_adaptive(img, sigma=25/255)          # 逐图自适应（SURE）
+```
+
+### Set12 实测（12 张 × σ=15/25/50）
+
+| σ | 噪声原图 | fast | standard | BM3D |
+|---|---|---|---|---|
+| 15 | 24.67 | 31.71 | 31.76 | 32.40 |
+| 25 | 20.33 | 29.04 | 29.10 | 29.98 |
+| 50 | 14.76 | 25.20 | 25.33 | 26.35 |
+
+`standard` 与 BM3D 差 0.85 dB，但快约 22 倍（0.075 s vs 11.8 s，2 vCPU）。
+
+## 参数有限搜索
+
+`tools/finite_search.py` 用「三节点法」把无界参数空间变成有限计算：
+
+- 固定位置：`blocks`（7 种）、`remove_pattern`（2 种）→ 直接枚举
+- 固定数量：连续参数只有 `k0` / `lam` / `flat` 三个
+- 不固定：离散成有限槽位后，**粗格 → 细化**
+
+实测：生物进化 360 次评估 / 368 s / 28.502 → **分层有限 50 次 / 67 s / 28.504**（快 5.5 倍）。
+
+```bash
+python3 tools/finite_search.py --images data/set12
+python3 benchmark_set12.py --set12 data/set12
+```
